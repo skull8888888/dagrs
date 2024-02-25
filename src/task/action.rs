@@ -51,7 +51,6 @@ pub type Simple = dyn Fn(Input, Arc<EnvVar>) -> Output + Send + Sync;
 /// };
 /// let action = Action::Structure(Arc::new(hello));
 /// ```
-#[async_trait]
 pub trait Complex {
     fn run(&self, input: Input, env: Arc<EnvVar>) -> Output;
 
