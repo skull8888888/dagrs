@@ -9,7 +9,7 @@
 //! can specify which task to execute by giving the name of the Dag, or follow the order in which
 //! the Dags are added to the Engine , executing each Dag in turn.
 
-pub use dag::Dag;
+pub use dag::{Dag, OutputMessage};
 use log::error;
 use thiserror::Error;
 

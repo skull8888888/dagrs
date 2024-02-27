@@ -1,19 +1,18 @@
 use super::{graph::Graph, DagError};
 use crate::{
-    task::{ExecState, Input, Task},
+    task::{ExecState, Input, Output, Task},
     utils::EnvVar,
     Action, Parser,
 };
 use log::{debug, error};
 use std::{
-    collections::HashMap,
-    panic::{self, AssertUnwindSafe},
-    sync::{
+    collections::HashMap, panic::{self, AssertUnwindSafe}, sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
-    },
+    }
 };
 use tokio::task::JoinHandle;
+use tokio::sync::mpsc::UnboundedSender;
 
 /// [`Dag`] is dagrs's main body.
 ///
@@ -71,6 +70,21 @@ pub struct Dag {
     keep_going_errored: Arc<AtomicBool>,
     /// The execution sequence of tasks.
     exe_sequence: Vec<usize>,
+    /// MPSC channel for sending back task outputs
+    tx: Option<UnboundedSender<OutputMessage>>,
+}
+
+/// message sent back at each task execution
+#[derive(Debug)]
+pub enum OutputMessage {
+    Finish,
+    Message(OutputMessageContent),
+}
+
+#[derive(Debug)]
+pub struct OutputMessageContent {
+    pub task_name: String,
+    pub result: Output,
 }
 
 impl Dag {
@@ -86,12 +100,39 @@ impl Dag {
             exe_sequence: Vec::new(),
             keep_going: false,
             keep_going_errored: Arc::new(AtomicBool::new(false)),
+            tx: None,
         }
     }
+
+    fn new_with_sender(tx: UnboundedSender<OutputMessage>) -> Dag {
+        Dag {
+            tasks: HashMap::new(),
+            rely_graph: Graph::new(),
+            execute_states: HashMap::new(),
+            env: Arc::new(EnvVar::new()),
+            can_continue: Arc::new(AtomicBool::new(true)),
+            exe_sequence: Vec::new(),
+            keep_going: false,
+            keep_going_errored: Arc::new(AtomicBool::new(false)),
+            tx: Some(tx),
+        }
+    }
+
 
     /// Create a dag by adding a series of tasks.
     pub fn with_tasks(tasks: Vec<impl Task + 'static>) -> Dag {
         let mut dag = Dag::new();
+
+        dag.tasks = tasks
+            .into_iter()
+            .map(|task| (task.id(), Box::new(task) as Box<dyn Task>))
+            .collect();
+
+        dag
+    }
+
+    pub fn with_tasks_and_sender(tasks: Vec<impl Task + 'static>, tx: UnboundedSender<OutputMessage>) -> Dag {
+        let mut dag = Dag::new_with_sender(tx);
 
         dag.tasks = tasks
             .into_iter()
@@ -307,6 +348,10 @@ impl Dag {
             }
         }
 
+        if let Some(tx) = self.tx.clone() {
+            let _ = tx.send(OutputMessage::Finish);
+        }
+
         if self.keep_going {
             // when keep_going is true, the task will continue to execute as much as possible.
             // So, the success is evaluated by keep_going_errored.
@@ -332,6 +377,7 @@ impl Dag {
             .collect();
         let action = task.action();
         let can_continue = self.can_continue.clone();
+        let tx = self.tx.clone();
 
         tokio::spawn(async move {
             // Wait for the execution result of the predecessor task
@@ -357,6 +403,12 @@ impl Dag {
                 },
                 Ok(out) => {
                     let out = out.await;
+                    if let Some(tx) = tx {
+                        let _ = tx.send(OutputMessage::Message(OutputMessageContent{
+                            task_name: task_name.to_string(),
+                            result: out.clone(),
+                        }));
+                    };
                     // Store execution results
                     if out.is_err() {
                         error!(

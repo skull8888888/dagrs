@@ -93,7 +93,7 @@ pub(crate) struct ExecState {
 }
 
 /// Output produced by a task.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Output {
     Out(Option<Content>),
     Err(String),
