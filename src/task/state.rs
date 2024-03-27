@@ -98,6 +98,7 @@ pub enum Output {
     Out(Option<Content>),
     Err(String),
     ErrWithExitCode(Option<i32>, Option<Content>),
+    Termination,
 }
 
 /// Task's input value.
@@ -124,9 +125,9 @@ impl ExecState {
 
     /// [`Output`] for fetching internal storage.
     /// This function is generally not called directly, but first uses the semaphore for synchronization control.
-    pub(crate) fn get_output(&self) -> Option<Content> {
+    pub(crate) fn get_output(&self) -> Option<Output> {
         if let Some(out) = unsafe { self.output.load(Ordering::Relaxed).as_ref() } {
-            out.get_out()
+            Some(out.clone())
         } else {
             None
         }
@@ -144,6 +145,14 @@ impl ExecState {
 
     pub(crate) fn exe_fail(&self) {
         self.success.store(false, Ordering::Relaxed)
+    }
+
+    /// A utility function to set the successful output and propagate down the line
+    /// by adding permits.
+    pub(crate) fn set_and_propagate_success(&self, output: Output, n_permits_to_add: usize) {
+        self.set_output(output);
+        self.exe_success();
+        self.semaphore().add_permits(n_permits_to_add);
     }
 
     /// The semaphore is used to control the synchronous acquisition of task output results.
@@ -170,6 +179,10 @@ impl Output {
         Self::Out(None)
     }
 
+    pub fn termination() -> Self {
+        Self::Termination
+    }
+
     /// Construct an [`Output`]` with an error message.
     pub fn error(msg: String) -> Self {
         Self::Err(msg)
@@ -184,22 +197,26 @@ impl Output {
     pub(crate) fn is_err(&self) -> bool {
         match self {
             Self::Err(_) | Self::ErrWithExitCode(_, _) => true,
-            Self::Out(_) => false,
+            Self::Out(_) | Self::Termination => false,
         }
+    }
+
+    pub(crate) fn is_termination(&self) -> bool {
+        matches!(self, Self::Termination)
     }
 
     /// Get the contents of [`Output`].
     pub(crate) fn get_out(&self) -> Option<Content> {
         match self {
             Self::Out(ref out) => out.clone(),
-            Self::Err(_) | Self::ErrWithExitCode(_, _) => None,
+            Self::Err(_) | Self::ErrWithExitCode(_, _) | Self::Termination => None,
         }
     }
 
     /// Get error information stored in [`Output`].
     pub(crate) fn get_err(&self) -> Option<String> {
         match self {
-            Self::Out(_) => None,
+            Self::Out(_) | Self::Termination => None,
             Self::Err(err) => Some(err.to_string()),
             Self::ErrWithExitCode(_, err) => {
                 if let Some(e) = err {

@@ -1,6 +1,6 @@
 use crate::{EnvVar, Input, Output};
-use std::sync::Arc;
 use async_trait::async_trait;
+use std::sync::Arc;
 
 /// The type of closure that performs logic.
 /// # [`Simple`]

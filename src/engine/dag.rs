@@ -4,15 +4,17 @@ use crate::{
     utils::EnvVar,
     Action, Parser,
 };
-use log::{debug, error};
+use log::{debug, error, info};
 use std::{
-    collections::HashMap, panic::{self, AssertUnwindSafe}, sync::{
+    collections::HashMap,
+    panic::{self, AssertUnwindSafe},
+    sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
-    }
+    },
 };
-use tokio::task::JoinHandle;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinHandle;
 
 /// [`Dag`] is dagrs's main body.
 ///
@@ -87,6 +89,13 @@ pub struct OutputMessageContent {
     pub result: Output,
 }
 
+#[derive(Debug)]
+enum ExecResult {
+    Success,
+    Failure,
+    Termination,
+}
+
 impl Dag {
     /// Create a dag. This function is not open to the public. There are three ways to create a new
     /// dag, corresponding to three functions: `with_tasks`, `with_yaml`, `with_config_file_and_parser`.
@@ -118,7 +127,6 @@ impl Dag {
         }
     }
 
-
     /// Create a dag by adding a series of tasks.
     pub fn with_tasks(tasks: Vec<impl Task + 'static>) -> Dag {
         let mut dag = Dag::new();
@@ -131,7 +139,10 @@ impl Dag {
         dag
     }
 
-    pub fn with_tasks_and_sender(tasks: Vec<impl Task + 'static>, tx: UnboundedSender<OutputMessage>) -> Dag {
+    pub fn with_tasks_and_sender(
+        tasks: Vec<impl Task + 'static>,
+        tx: UnboundedSender<OutputMessage>,
+    ) -> Dag {
         let mut dag = Dag::new_with_sender(tx);
 
         dag.tasks = tasks
@@ -337,8 +348,8 @@ impl Dag {
         for (tid, handle) in handles {
             match handle.await {
                 Ok(succeed) => {
-                    if !succeed {
-                        self.handle_error(tid);
+                    if matches!(succeed, ExecResult::Failure) {
+                        self.handle_error(tid)
                     }
                 }
                 Err(err) => {
@@ -364,7 +375,7 @@ impl Dag {
     }
 
     /// Execute a given task asynchronously.
-    fn execute_task(&self, task: &dyn Task) -> JoinHandle<bool> {
+    fn execute_task(&self, task: &dyn Task) -> JoinHandle<ExecResult> {
         let env = self.env.clone();
         let task_id = task.id();
         let task_name = task.name().to_string();
@@ -388,23 +399,33 @@ impl Dag {
                 // the continuation flag is set to false, if it is set to false, cancel the specific
                 // execution logic of the task and return immediately.
                 if !can_continue.load(Ordering::Acquire) || !wait_for.success() {
-                    return true;
+                    return ExecResult::Termination;
                 }
-                if let Some(content) = wait_for.get_output() {
-                    inputs.push(content);
+                // Set the outputs of predecessors as inputs of the current
+                if let Some(output) = wait_for.get_output() {
+                    // If at least one of the inputs is termination, also terminate this node early,
+                    // applies to all except exit node
+                    // TODO: `task_out_degree` > 0 is a way to check for non-exit nodes. Fix this with something more reliable
+                    if matches!(output, Output::Termination) && task_out_degree > 0 {
+                        execute_state.set_and_propagate_success(output, task_out_degree);
+                        return ExecResult::Termination;
+                    }
+                    if let Some(content) = output.get_out() {
+                        inputs.push(content);
+                    }
                 }
             }
-            debug!("Executing task [name: {}, id: {}]", task_name, task_id);
+            info!("Executing task [name: {}, id: {}]", task_name, task_id);
             // Concrete logical behavior for performing tasks.
             match panic::catch_unwind(AssertUnwindSafe(|| action.run(Input::new(inputs), env))) {
                 Err(_) => {
                     error!("Execution failed [name: {}, id: {}]", task_name, task_id);
-                    false
-                },
+                    ExecResult::Failure
+                }
                 Ok(out) => {
                     let out = out.await;
                     if let Some(tx) = tx {
-                        let _ = tx.send(OutputMessage::Message(OutputMessageContent{
+                        let _ = tx.send(OutputMessage::Message(OutputMessageContent {
                             task_name: task_name.to_string(),
                             result: out.clone(),
                         }));
@@ -417,13 +438,20 @@ impl Dag {
                             task_id,
                             out.get_err().unwrap_or("".to_string())
                         );
-                        false
+                        ExecResult::Failure
                     } else {
-                        execute_state.set_output(out);
-                        execute_state.exe_success();
-                        execute_state.semaphore().add_permits(task_out_degree);
-                        debug!("Execution succeed [name: {}, id: {}]", task_name, task_id);
-                        true
+                        let is_termination = out.is_termination().clone();
+                        execute_state.set_and_propagate_success(out, task_out_degree);
+                        if is_termination {
+                            debug!(
+                                "Execution terminated [name: {}, id: {}]",
+                                task_name, task_id,
+                            );
+                            ExecResult::Termination
+                        } else {
+                            debug!("Execution succeed [name: {}, id: {}]", task_name, task_id);
+                            ExecResult::Success
+                        }
                     }
                 }
             }
@@ -506,8 +534,11 @@ impl Dag {
             None
         } else {
             let last_id = self.exe_sequence.last().unwrap();
-            if let Some(content) = self.execute_states[last_id].get_output() {
-                content.into_inner()
+            if let Some(output) = self.execute_states[last_id].get_output() {
+                output
+                    .get_out()
+                    .map(|content| content.into_inner())
+                    .unwrap_or(None)
             } else {
                 None
             }
@@ -521,7 +552,10 @@ impl Dag {
             .iter()
             .map(|(&id, state)| {
                 let output = match state.get_output() {
-                    Some(content) => content.into_inner(),
+                    Some(output) => output
+                        .get_out()
+                        .map(|content| content.into_inner())
+                        .unwrap_or(None),
                     None => None,
                 };
                 (id, output)
