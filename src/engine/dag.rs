@@ -415,7 +415,7 @@ impl Dag {
                     }
                 }
             }
-            info!("Executing task [name: {}, id: {}]", task_name, task_id);
+            debug!("Executing task [name: {}, id: {}]", task_name, task_id);
             // Concrete logical behavior for performing tasks.
             match panic::catch_unwind(AssertUnwindSafe(|| action.run(Input::new(inputs), env))) {
                 Err(_) => {
