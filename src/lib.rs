@@ -11,6 +11,7 @@ pub use derive::*;
 pub use engine::{Dag, DagError, Engine, OutputMessage};
 pub use task::{
     alloc_id, Action, CommandAction, Complex, DefaultTask, Input, Output, Simple, Task,
+    ToErrorMessage,
 };
 pub use utils::{EnvVar, ParseError, Parser};
 #[cfg(feature = "yaml")]

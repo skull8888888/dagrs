@@ -4,7 +4,7 @@ use crate::{
     utils::EnvVar,
     Action, Parser,
 };
-use log::{debug, error, info};
+use log::{debug, error};
 use std::{
     collections::HashMap,
     panic::{self, AssertUnwindSafe},
@@ -436,7 +436,7 @@ impl Dag {
                             "Execution failed [name: {}, id: {}]\nerr: {}",
                             task_name,
                             task_id,
-                            out.get_err().unwrap_or("".to_string())
+                            out.get_err().unwrap_or("DAGRS: couldn't parse error message".to_string())
                         );
                         ExecResult::Failure
                     } else {
