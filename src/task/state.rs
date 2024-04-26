@@ -36,7 +36,8 @@
 //! to implement the logic of the program.
 
 use std::{
-    any::Any, fmt::Debug, slice::Iter, sync::{
+    any::Any, fmt::Debug, slice::Iter,
+    sync::{
         atomic::{AtomicBool, AtomicPtr, Ordering},
         Arc,
     }
