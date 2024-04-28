@@ -32,7 +32,7 @@ pub use self::cmd::CommandAction;
 pub use self::default_task::DefaultTask;
 pub use self::state::Content;
 pub(crate) use self::state::ExecState;
-pub use self::state::{Input, Output};
+pub use self::state::{Input, Output, ToErrorMessage};
 
 mod action;
 mod cmd;

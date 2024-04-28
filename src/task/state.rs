@@ -36,12 +36,11 @@
 //! to implement the logic of the program.
 
 use std::{
-    any::Any,
-    slice::Iter,
+    any::Any, fmt::Debug, slice::Iter,
     sync::{
         atomic::{AtomicBool, AtomicPtr, Ordering},
         Arc,
-    },
+    }
 };
 
 use tokio::sync::Semaphore;
@@ -71,6 +70,10 @@ impl Content {
     pub fn into_inner<H: Send + Sync + 'static>(self) -> Option<Arc<H>> {
         self.content.downcast::<H>().ok()
     }
+
+    pub fn to_error_message<H: ToErrorMessage + 'static>(self) -> String {
+        self.content.downcast_ref::<H>().unwrap().to_error_message()
+    }
 }
 
 /// [`ExeState`] internally stores [`Output`], which represents whether the execution of
@@ -96,7 +99,7 @@ pub(crate) struct ExecState {
 #[derive(Debug, Clone)]
 pub enum Output {
     Out(Option<Content>),
-    Err(String),
+    Err(Option<Content>),
     ErrWithExitCode(Option<i32>, Option<Content>),
     Termination,
 }
@@ -104,6 +107,17 @@ pub enum Output {
 /// Task's input value.
 #[derive(Debug)]
 pub struct Input(Vec<Content>);
+
+pub trait ToErrorMessage {
+    fn to_error_message(&self) -> String;
+}
+
+// backward compatibility
+impl ToErrorMessage for String {
+    fn to_error_message(&self) -> String {
+        self.clone()
+    }
+}
 
 impl ExecState {
     /// Construct a new [`ExeState`].
@@ -184,8 +198,8 @@ impl Output {
     }
 
     /// Construct an [`Output`]` with an error message.
-    pub fn error(msg: String) -> Self {
-        Self::Err(msg)
+    pub fn error<H: Send + Sync + Debug + ToErrorMessage + 'static>(msg: H) -> Self {
+        Self::Err(Some(Content::new(msg)))
     }
 
     /// Construct an [`Output`]` with an exit code and an optional error message.
@@ -209,7 +223,8 @@ impl Output {
     pub(crate) fn get_out(&self) -> Option<Content> {
         match self {
             Self::Out(ref out) => out.clone(),
-            Self::Err(_) | Self::ErrWithExitCode(_, _) | Self::Termination => None,
+            Self::Err(ref out) => out.clone(),
+            Self::ErrWithExitCode(_, _) | Self::Termination => None,
         }
     }
 
@@ -217,7 +232,18 @@ impl Output {
     pub(crate) fn get_err(&self) -> Option<String> {
         match self {
             Self::Out(_) | Self::Termination => None,
-            Self::Err(err) => Some(err.to_string()),
+            Self::Err(err) => {
+                err
+                    .as_ref()
+                    .map(|content| {
+                        // TODO: this `get` here always returns None
+                        content
+                            .get::<Box<dyn ToErrorMessage>>()
+                            .map(|m| m.to_error_message())
+                    })
+                    .flatten()
+
+            }
             Self::ErrWithExitCode(_, err) => {
                 if let Some(e) = err {
                     Some(e.get::<String>()?.to_string())
