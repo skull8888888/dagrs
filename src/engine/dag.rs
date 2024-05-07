@@ -402,17 +402,16 @@ impl Dag {
                     return ExecResult::Termination;
                 }
                 // Set the outputs of predecessors as inputs of the current
-                if let Some(output) = wait_for.get_output() {
-                    // If at least one of the inputs is termination, also terminate this node early,
-                    // applies to all except exit node
-                    // TODO: `task_out_degree` > 0 is a way to check for non-exit nodes. Fix this with something more reliable
-                    if matches!(output, Output::Termination) && task_out_degree > 0 {
-                        execute_state.set_and_propagate_success(output, task_out_degree);
-                        return ExecResult::Termination;
-                    }
-                    if let Some(content) = output.get_out() {
-                        inputs.push(content);
-                    }
+                let output = wait_for.get_output();
+                // If at least one of the inputs is termination, also terminate this node early,
+                // applies to all except exit node
+                // TODO: `task_out_degree` > 0 is a way to check for non-exit nodes. Fix this with something more reliable
+                if matches!(output, Output::Termination) && task_out_degree > 0 {
+                    execute_state.set_and_propagate_success(output, task_out_degree);
+                    return ExecResult::Termination;
+                }
+                if let Some(content) = output.get_out() {
+                    inputs.push(content);
                 }
             }
             debug!("Executing task [name: {}, id: {}]", task_name, task_id);
@@ -534,14 +533,10 @@ impl Dag {
             None
         } else {
             let last_id = self.exe_sequence.last().unwrap();
-            if let Some(output) = self.execute_states[last_id].get_output() {
-                output
-                    .get_out()
-                    .map(|content| content.into_inner())
-                    .unwrap_or(None)
-            } else {
-                None
-            }
+            self.execute_states[last_id].get_output()
+                .get_out()
+                .map(|content| content.into_inner())
+                .unwrap_or(None)
         }
     }
 
@@ -551,13 +546,10 @@ impl Dag {
             .execute_states
             .iter()
             .map(|(&id, state)| {
-                let output = match state.get_output() {
-                    Some(output) => output
+                let output = state.get_output()
                         .get_out()
                         .map(|content| content.into_inner())
-                        .unwrap_or(None),
-                    None => None,
-                };
+                        .unwrap_or(None);
                 (id, output)
             })
             .collect();
