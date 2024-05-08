@@ -22,7 +22,7 @@ use tokio::runtime::Runtime;
 
 /// The Engine. Manage multiple Dags.
 pub struct Engine {
-    dags: HashMap<String, Dag>,
+    dags: HashMap<String, Dag<'static>>,
     /// According to the order in which Dags are added to the Engine, assign a sequence number to each Dag.
     /// Sequence numbers can be used to execute Dags sequentially.
     sequence: HashMap<usize, String>,
@@ -52,7 +52,7 @@ pub enum DagError {
 impl Engine {
     /// Add a Dag to the Engine and assign a sequence number to the Dag.
     /// It should be noted that different Dags should specify different names.
-    pub fn append_dag(&mut self, name: &str, mut dag: Dag) {
+    pub fn append_dag(&mut self, name: &str, mut dag: Dag<'static>) {
         if !self.dags.contains_key(name) {
             match dag.init() {
                 Ok(()) => {

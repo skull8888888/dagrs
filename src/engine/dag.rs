@@ -47,13 +47,13 @@ use tokio::task::JoinHandle;
 /// assert!(dag.start().unwrap())
 ///
 /// ```
-#[derive(Debug)]
-pub struct Dag {
+// #[derive(Debug)]
+pub struct Dag <'a> {
     /// Store all tasks' infos.
     ///
     /// Arc but no mutex, because only one thread will change [`TaskWrapper`]at a time.
     /// And no modification to [`TaskWrapper`] happens during the execution of it.
-    tasks: HashMap<usize, Box<dyn Task>>,
+    tasks: HashMap<usize, Box<dyn Task + 'a>>,
     /// Store dependency relations.
     rely_graph: Graph,
     /// Store a task's running result.Execution results will be read and written asynchronously by several threads.
@@ -96,10 +96,10 @@ enum ExecResult {
     Termination,
 }
 
-impl Dag {
+impl <'a> Dag <'a> {
     /// Create a dag. This function is not open to the public. There are three ways to create a new
     /// dag, corresponding to three functions: `with_tasks`, `with_yaml`, `with_config_file_and_parser`.
-    fn new() -> Dag {
+    fn new() -> Dag<'a> {
         Dag {
             tasks: HashMap::new(),
             rely_graph: Graph::new(),
@@ -113,7 +113,7 @@ impl Dag {
         }
     }
 
-    fn new_with_sender(tx: UnboundedSender<OutputMessage>) -> Dag {
+    fn new_with_sender(tx: UnboundedSender<OutputMessage>) -> Dag<'a> {
         Dag {
             tasks: HashMap::new(),
             rely_graph: Graph::new(),
@@ -128,7 +128,7 @@ impl Dag {
     }
 
     /// Create a dag by adding a series of tasks.
-    pub fn with_tasks(tasks: Vec<impl Task + 'static>) -> Dag {
+    pub fn with_tasks(tasks: Vec<impl Task + 'a>) -> Dag<'a> {
         let mut dag = Dag::new();
 
         dag.tasks = tasks
@@ -140,9 +140,9 @@ impl Dag {
     }
 
     pub fn with_tasks_and_sender(
-        tasks: Vec<impl Task + 'static>,
+        tasks: Vec<impl Task + 'a>,
         tx: UnboundedSender<OutputMessage>,
-    ) -> Dag {
+    ) -> Dag<'a> {
         let mut dag = Dag::new_with_sender(tx);
 
         dag.tasks = tasks
@@ -154,7 +154,7 @@ impl Dag {
     }
 
     /// Create a dag by adding a series of tasks that implement the [`Task`] trait.
-    pub fn with_tasks_dyn(tasks: Vec<Box<dyn Task>>) -> Dag {
+    pub fn with_tasks_dyn(tasks: Vec<Box<dyn Task>>) -> Dag<'a> {
         let mut dag = Dag::new();
 
         dag.tasks = tasks.into_iter().map(|task| (task.id(), task)).collect();
@@ -205,7 +205,7 @@ impl Dag {
     /// Set the flag that indicates whether the task should continue to execute as much as possible.
     /// This means that even if an error occurs during the execution of a task, the subsequent independent tasks
     /// will continue to execute unless a dependency error occurs.
-    pub fn keep_going(mut self) -> Dag {
+    pub fn keep_going(mut self) -> Dag<'a> {
         self.keep_going = true;
         self
     }
@@ -402,17 +402,16 @@ impl Dag {
                     return ExecResult::Termination;
                 }
                 // Set the outputs of predecessors as inputs of the current
-                if let Some(output) = wait_for.get_output() {
-                    // If at least one of the inputs is termination, also terminate this node early,
-                    // applies to all except exit node
-                    // TODO: `task_out_degree` > 0 is a way to check for non-exit nodes. Fix this with something more reliable
-                    if matches!(output, Output::Termination) && task_out_degree > 0 {
-                        execute_state.set_and_propagate_success(output, task_out_degree);
-                        return ExecResult::Termination;
-                    }
-                    if let Some(content) = output.get_out() {
-                        inputs.push(content);
-                    }
+                let output = wait_for.get_output();
+                // If at least one of the inputs is termination, also terminate this node early,
+                // applies to all except exit node
+                // TODO: `task_out_degree` > 0 is a way to check for non-exit nodes. Fix this with something more reliable
+                if matches!(output, Output::Termination) && task_out_degree > 0 {
+                    execute_state.set_and_propagate_success(output, task_out_degree);
+                    return ExecResult::Termination;
+                }
+                if let Some(content) = output.get_out() {
+                    inputs.push(content);
                 }
             }
             debug!("Executing task [name: {}, id: {}]", task_name, task_id);
@@ -534,14 +533,10 @@ impl Dag {
             None
         } else {
             let last_id = self.exe_sequence.last().unwrap();
-            if let Some(output) = self.execute_states[last_id].get_output() {
-                output
-                    .get_out()
-                    .map(|content| content.into_inner())
-                    .unwrap_or(None)
-            } else {
-                None
-            }
+            self.execute_states[last_id].get_output()
+                .get_out()
+                .map(|content| content.into_inner())
+                .unwrap_or(None)
         }
     }
 
@@ -551,13 +546,10 @@ impl Dag {
             .execute_states
             .iter()
             .map(|(&id, state)| {
-                let output = match state.get_output() {
-                    Some(output) => output
+                let output = state.get_output()
                         .get_out()
                         .map(|content| content.into_inner())
-                        .unwrap_or(None),
-                    None => None,
-                };
+                        .unwrap_or(None);
                 (id, output)
             })
             .collect();
